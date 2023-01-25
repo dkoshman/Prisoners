@@ -272,10 +272,10 @@ public:
             return;
         }
         auto stage_index = GetStageIndex(input.day_number);
-        auto exchange_rate = 1 << stage_index;
-        bool have_matching_bit = n_tokens & exchange_rate;
+        auto light_in_tokens_value = 1 << stage_index;
+        bool have_matching_bit = n_tokens & light_in_tokens_value;
         if (IsLastDayOfTheStage(input.day_number) or have_matching_bit) {
-            n_tokens += exchange_rate;
+            n_tokens += light_in_tokens_value;
             input.light->TurnOff();
         }
     }
@@ -285,10 +285,10 @@ public:
             return;
         }
         auto next_day_stage_index = GetStageIndex(input.day_number + 1);
-        auto next_day_exchange_rate = 1 << next_day_stage_index;
-        auto have_matching_bit = n_tokens & next_day_exchange_rate;
+        auto next_day_light_in_tokens_value = 1 << next_day_stage_index;
+        auto have_matching_bit = n_tokens & next_day_light_in_tokens_value;
         if (have_matching_bit) {
-            n_tokens -= next_day_exchange_rate;
+            n_tokens -= next_day_light_in_tokens_value;
             input.light->TurnOn();
         }
     }
