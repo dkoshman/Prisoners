@@ -1,6 +1,5 @@
-#include <math.h>
-
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <iostream>
 #include <numeric>
@@ -10,17 +9,25 @@
 #include <vector>
 
 namespace rng {
-std::random_device random_device;
-std::mt19937 generator(random_device());
+std::random_device &GetDevice() {
+    static std::random_device random_device;
+    return random_device;
+}
+
+std::mt19937 &GetGenerator() {
+    auto &device = GetDevice();
+    static std::mt19937 generator(device());
+    return generator;
+}
 }  // namespace rng
 
 class Light {
 public:
-    bool IsOn() const {
+    [[nodiscard]] bool IsOn() const {
         return is_on;
     }
 
-    bool IsOff() const {
+    [[nodiscard]] bool IsOff() const {
         return not IsOn();
     }
 
@@ -69,16 +76,13 @@ public:
     }
 
     bool HaveAllPrisonersBeenInTheRoom() {
-        for (auto i : prisoners_have_been_in_the_room_indicators) {
-            if (not i) {
-                return false;
-            }
-        }
-        return true;
+        return std::all_of(prisoners_have_been_in_the_room_indicators.begin(),
+                           prisoners_have_been_in_the_room_indicators.end(),
+                           [](bool x) { return x; });
     }
 
     PrisonerClaim NextDay() {
-        auto prisoner_id = distribution_(rng::generator);
+        auto prisoner_id = distribution_(rng::GetGenerator());
         prisoners_have_been_in_the_room_indicators[prisoner_id] = true;
         auto prisoner_claim = prisoners[prisoner_id].TakeAction({day_number, &light});
         ++day_number;
@@ -98,7 +102,7 @@ public:
         }
     }
 
-    int32_t n_prisoners = 0;
+    [[maybe_unused]] int32_t n_prisoners = 0;
     int32_t day_number = 0;
     Light light = Light{};
     std::vector<Prisoner> prisoners;
@@ -112,7 +116,7 @@ class DedicatedCounterPrisoner : public PrisonerBase {
 public:
     using PrisonerBase::PrisonerBase;
 
-    PrisonerClaim TakeAction(PrisonerInput input) {
+    PrisonerClaim TakeAction(PrisonerInput input) override {
         if (prisoner_id == 0) {
             if (input.light->IsOn()) {
                 input.light->TurnOff();
@@ -147,11 +151,11 @@ public:
         }
     }
 
-    int32_t GetClosestNotSmallerPowerOf2(int32_t number) const {
+    static int32_t GetClosestNotSmallerPowerOf2(int32_t number) {
         return std::ceil(log2(number));
     }
 
-    int32_t GetStageId(int32_t day_number) const {
+    [[nodiscard]] int32_t GetStageIndex(int32_t day_number) const {
         int32_t first_cycle_interval = n_prisoners * 7;
         int32_t next_cycles_interval = n_prisoners * 3;
         auto n_stages = GetClosestNotSmallerPowerOf2(n_prisoners);
@@ -164,16 +168,16 @@ public:
         }
     }
 
-    bool IsLastDayOfTheStage(int32_t day_number) const {
-        return GetStageId(day_number) != GetStageId(day_number + 1);
+    [[nodiscard]] bool IsLastDayOfTheStage(int32_t day_number) const {
+        return GetStageIndex(day_number) != GetStageIndex(day_number + 1);
     }
 
     void MaybeTurnOffLight(PrisonerInput input) {
         if (input.light->IsOff()) {
             return;
         }
-        auto stage_id = GetStageId(input.day_number);
-        auto exchange_rate = 1 << stage_id;
+        auto stage_index = GetStageIndex(input.day_number);
+        auto exchange_rate = 1 << stage_index;
         bool have_matching_bit = n_tokens & exchange_rate;
         if (IsLastDayOfTheStage(input.day_number) or have_matching_bit) {
             n_tokens += exchange_rate;
@@ -185,8 +189,8 @@ public:
         if (input.light->IsOn()) {
             return;
         }
-        auto next_day_stage_id = GetStageId(input.day_number + 1);
-        auto next_day_exchange_rate = 1 << next_day_stage_id;
+        auto next_day_stage_index = GetStageIndex(input.day_number + 1);
+        auto next_day_exchange_rate = 1 << next_day_stage_index;
         auto have_matching_bit = n_tokens & next_day_exchange_rate;
         if (have_matching_bit) {
             n_tokens -= next_day_exchange_rate;
@@ -194,11 +198,11 @@ public:
         }
     }
 
-    bool ShouldClaimThatEveryoneHasBeenInTheRoom() const {
+    [[nodiscard]] bool ShouldClaimThatEveryoneHasBeenInTheRoom() const {
         return n_tokens == 1 << GetClosestNotSmallerPowerOf2(n_prisoners);
     }
 
-    PrisonerClaim TakeAction(PrisonerInput input) {
+    PrisonerClaim TakeAction(PrisonerInput input) override {
         MaybeTurnOffLight(input);
         MaybeTurnOnLight(input);
 
@@ -231,8 +235,7 @@ void RunPrisonSimulations(int32_t n_prisoners, int32_t n_simulations) {
     }
 
     double days_mean =
-        std::reduce(days_prison_ran_for.begin(), days_prison_ran_for.end()) /
-        n_simulations;
+        std::reduce(days_prison_ran_for.begin(), days_prison_ran_for.end()) / n_simulations;
     double days_std = 0;
     for (auto i : days_prison_ran_for) {
         days_std += (i - days_mean) * (i - days_mean);
@@ -252,11 +255,11 @@ int main(int argc, char *argv[]) {
     if (argc == 1) {
         throw std::invalid_argument{"Provide Prisoner class name to use."};
     }
-    if (argc >= 2) {
+    if (argc >= 3) {
         std::istringstream iss{argv[2]};
         iss >> n_prisoners;
     }
-    if (argc >= 3) {
+    if (argc >= 4) {
         std::istringstream iss{argv[3]};
         iss >> n_simulations;
     }
