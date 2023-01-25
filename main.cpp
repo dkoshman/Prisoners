@@ -140,14 +140,36 @@ public:
 
 class TokenPrisoner : public PrisonerBase {
 public:
-    TokenPrisoner(int32_t prisoner_id, int32_t n_prisoners)
+    TokenPrisoner(int32_t prisoner_id, int32_t n_prisoners, double stage_probability = 0.95,
+                  double after_first_cycle_stage_length_multiplier = 0.5)
         : PrisonerBase{prisoner_id, n_prisoners} {
-        auto n_prisoners_with_2_tokens =
-            (1 << GetClosestNotSmallerPowerOf2(n_prisoners)) - n_prisoners;
-        if (prisoner_id < n_prisoners_with_2_tokens) {
-            n_tokens = 2;
-        } else {
-            n_tokens = 1;
+
+        n_stages = GetClosestNotSmallerPowerOf2(n_prisoners);
+        auto n_prisoners_with_2_tokens_initially = (1 << n_stages) - n_prisoners;
+        auto n_prisoners_with_1_token_initially = n_prisoners - n_prisoners_with_2_tokens_initially;
+        n_tokens = prisoner_id < n_prisoners_with_2_tokens_initially ? 2 : 1;
+
+        for (int i = 1; i <= n_stages; i++) {
+            if (i == 1) {
+                auto stage_1_length =
+                    ComputeNumberOfDaysSoThatKPrisonersVisitTheRoomWithGivenProbability(
+                        n_prisoners_with_1_token_initially, stage_probability);
+                first_cycle_stage_lengths.push_back(stage_1_length);
+
+            } else {
+                auto light_in_tokens_value_at_stage_i = 1 << (i - 1);
+                int32_t expected_number_of_prisoners_with_tokens =
+                    (1 << n_stages) / light_in_tokens_value_at_stage_i;
+                auto stage_length =
+                    ComputeNumberOfDaysSoThatKPrisonersVisitTheRoomWithGivenProbability(
+                        expected_number_of_prisoners_with_tokens, stage_probability);
+                first_cycle_stage_lengths.push_back(stage_length);
+            }
+        }
+
+        for (auto i : first_cycle_stage_lengths) {
+            after_first_cycle_stage_lengths.push_back(
+                static_cast<int32_t>(i * after_first_cycle_stage_length_multiplier));
         }
     }
 
@@ -155,17 +177,90 @@ public:
         return std::ceil(log2(number));
     }
 
-    [[nodiscard]] int32_t GetStageIndex(int32_t day_number) const {
-        int32_t first_cycle_interval = n_prisoners * 7;
-        int32_t next_cycles_interval = n_prisoners * 3;
-        auto n_stages = GetClosestNotSmallerPowerOf2(n_prisoners);
-
-        if (day_number < n_stages * first_cycle_interval) {
-            return day_number / first_cycle_interval;
-        } else {
-            auto tail = day_number - n_stages * first_cycle_interval;
-            return tail / next_cycles_interval % n_stages;
+    template <class T>
+    static T NChooseK(T n, T k) {
+        if (n < k) {
+            return 0;
         }
+        k = std::min(k, n - k);
+        T result = 1;
+        for (int i = 1; i <= k; i++) {
+            result = result * (n - k + i) / i;
+        }
+        return result;
+    }
+
+    static double ComputeProbabilityThatKFixedPrisonersWereInTheRoomDuringNDays(
+        int32_t k_prisoners, int32_t n_days, int32_t n_prisoners) {
+        if (n_days < k_prisoners or n_prisoners < k_prisoners) {
+            return 0;
+        }
+
+        double result = 0;
+        for (int32_t i = 0; i <= k_prisoners; i++) {
+            result += NChooseK<double>(k_prisoners, i) * std::pow(-1, i) *
+                      std::exp(n_days * std::log1p(static_cast<double>(-i) / n_prisoners));
+        }
+
+        if (result < -1.0e-3 or result > 1) {
+            throw std::runtime_error("Unstable probability calculation.");
+        }
+
+        return std::max(0.0, result);
+    }
+
+    int32_t ComputeNumberOfDaysSoThatKPrisonersVisitTheRoomWithGivenProbability(
+        int32_t k_prisoners, double target_probability) {
+        if (k_prisoners > n_prisoners) {
+            throw std::invalid_argument{
+                "Requested number of prisoners is greater than total number."};
+        }
+        int32_t galloping_bin_search_power = 0;
+        while (ComputeProbabilityThatKFixedPrisonersWereInTheRoomDuringNDays(
+                   k_prisoners, 1 << (galloping_bin_search_power + 1), n_prisoners) <
+               target_probability) {
+            ++galloping_bin_search_power;
+        }
+
+        auto low = 1 << galloping_bin_search_power;
+        auto high = 1 << (galloping_bin_search_power + 1);
+        while (low < high) {
+            int32_t mid = (low + high) / 2;
+            auto probability = ComputeProbabilityThatKFixedPrisonersWereInTheRoomDuringNDays(
+                k_prisoners, mid, n_prisoners);
+            if (probability < target_probability) {
+                low = mid + 1;
+            } else {
+                high = mid;
+            }
+        }
+        assert(ComputeProbabilityThatKFixedPrisonersWereInTheRoomDuringNDays(
+                   k_prisoners, low, n_prisoners) >= target_probability);
+        return low;
+    }
+
+    [[nodiscard]] int32_t GetStageIndex(int32_t day_number) const {
+        if (n_prisoners == 1) {
+            return 0;
+        }
+
+        int32_t accumulated_days = 0;
+        for (int i = 0; i < n_stages; ++i) {
+            accumulated_days += first_cycle_stage_lengths[i];
+            if (day_number < accumulated_days) {
+                return i;
+            }
+        }
+
+        auto stage_index = 0;
+        while (true) {
+            accumulated_days += after_first_cycle_stage_lengths[stage_index];
+            if (day_number < accumulated_days) {
+                return stage_index;
+            }
+            stage_index = (stage_index + 1) % n_stages;
+        }
+        assert(false);
     }
 
     [[nodiscard]] bool IsLastDayOfTheStage(int32_t day_number) const {
@@ -203,6 +298,10 @@ public:
     }
 
     PrisonerClaim TakeAction(PrisonerInput input) override {
+        if (n_prisoners == 1) {
+            return PrisonerClaim::claim_that_everyone_has_been_in_the_room;
+        }
+
         MaybeTurnOffLight(input);
         MaybeTurnOnLight(input);
 
@@ -214,19 +313,70 @@ public:
     }
 
     int32_t n_tokens = 0;
+    int32_t n_stages = 0;
+    std::vector<int32_t> first_cycle_stage_lengths;
+    std::vector<int32_t> after_first_cycle_stage_lengths;
 };
+
+namespace test {
+
+int64_t Factorial(int32_t n) {
+    int64_t result = 1;
+    for (int32_t i = 1; i <= n; ++i) {
+        result *= i;
+    }
+    return result;
+}
+
+template <class T>
+bool IsClose(T first, T second, T eps = 1.0e-7) {
+    return std::abs(first - second) < eps;
+}
 
 template <class Prisoner>
 void Test() {
-    for (int n_prisoners = 1; n_prisoners <= 100; ++n_prisoners) {
+
+    for (int32_t n = 1; n <= 10; ++n) {
+        for (int32_t k = 1; k <= n; ++k) {
+            auto expected_n_choose_k = Factorial(n) / Factorial(k) / Factorial(n - k);
+            auto n_choose_k = TokenPrisoner::NChooseK(n, k);
+            assert(n_choose_k == expected_n_choose_k);
+        }
+    }
+
+    auto n_choose_k = TokenPrisoner::NChooseK<double>(64, 32);
+    assert(IsClose(n_choose_k, 1832624140942590534.0, 1.0e+3));
+
+    {
+        auto n_prisoners = 5;
+        auto k_prisoners = 2;
+        auto n_days = 2;
+        double expected_probability = 0.08;
+        double probability =
+            TokenPrisoner::ComputeProbabilityThatKFixedPrisonersWereInTheRoomDuringNDays(
+                k_prisoners, n_days, n_prisoners);
+        assert(IsClose(probability, expected_probability));
+
+        n_prisoners = 4;
+        k_prisoners = 2;
+        n_days = 3;
+        expected_probability = 9.0 / 32;
+        probability = TokenPrisoner::ComputeProbabilityThatKFixedPrisonersWereInTheRoomDuringNDays(
+            k_prisoners, n_days, n_prisoners);
+        assert(IsClose(probability, expected_probability));
+    }
+
+    for (int32_t n_prisoners = 1; n_prisoners <= 100; n_prisoners *= 2) {
         Prison<Prisoner>(n_prisoners).Run();
     }
+    Prison<Prisoner>(100).Run();
 }
+}  // namespace test
 
 template <class Prisoner>
 void RunPrisonSimulations(int32_t n_prisoners, int32_t n_simulations) {
 
-    Test<Prisoner>();
+    test::Test<Prisoner>();
 
     std::vector<double> days_prison_ran_for;
     for (int i = 0; i < n_simulations; ++i) {
