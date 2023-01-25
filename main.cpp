@@ -397,13 +397,14 @@ void RunPrisonSimulations(int32_t n_prisoners, int32_t n_simulations) {
 }
 
 int main(int argc, char *argv[]) {
-    // Usage: prisoner_class_name [n_prisoners] [n_simulations]
+    // Usage: [prisoner_class_name] [n_prisoners] [n_simulations]
 
+    std::string prisoner_class_name = "DedicatedCounterPrisoner";
     int32_t n_prisoners = 100;
     int32_t n_simulations = 1000;
 
-    if (argc == 1) {
-        throw std::invalid_argument{"Provide Prisoner class name to use."};
+    if (argc >= 2) {
+        prisoner_class_name = argv[1];
     }
     if (argc >= 3) {
         std::istringstream iss{argv[2]};
@@ -414,9 +415,9 @@ int main(int argc, char *argv[]) {
         iss >> n_simulations;
     }
 
-    if (std::strcmp(argv[1], "DedicatedCounterPrisoner") == 0) {
+    if (prisoner_class_name == "DedicatedCounterPrisoner") {
         RunPrisonSimulations<DedicatedCounterPrisoner>(n_prisoners, n_simulations);
-    } else if (std::strcmp(argv[1], "TokenPrisoner") == 0) {
+    } else if (prisoner_class_name == "TokenPrisoner") {
         RunPrisonSimulations<TokenPrisoner>(n_prisoners, n_simulations);
     } else {
         throw std::invalid_argument{"Unknown Prisoner class name."};
